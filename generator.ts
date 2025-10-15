@@ -3,6 +3,7 @@ const modeEmosiOptions = [
   { value: "neutral", label: "Neutral" },
   { value: "excited", label: "Excited" },
   { value: "sad", label: "Sad" },
+  { value: "disappointed", label: "Disappointed" }
 ];
 
 const modeGayaOptions = [
