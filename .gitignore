@@ -35,5 +35,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 output/*
 output_json/*
+output_html/*
 input
 report*.xlsx
