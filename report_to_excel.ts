@@ -4,6 +4,28 @@ import { fileURLToPath } from 'url';
 import ExcelJS from 'exceljs';
 import type { Root } from './interface/response';
 
+// --- Pricing configuration (cost per 1M tokens) ---
+// Adjust these numbers as provider pricing changes.
+// Example based on screenshot provided: Input $0.25, Cached Input $0.03, Output $2.00 per 1M tokens.
+const PRICE_PER_M_INPUT = 0.25; // regular input tokens per 1M
+const PRICE_PER_M_CACHED_INPUT = 0.03; // cached input tokens per 1M (if you later distinguish)
+const PRICE_PER_M_OUTPUT = 2.0; // output tokens per 1M
+
+// Helper to compute cost from a raw token count.
+function costFromTokens(tokens: number | null | undefined, pricePerMillion: number): number | null {
+  if (typeof tokens !== 'number' || !isFinite(tokens)) return null;
+  return (tokens / 1_000_000) * pricePerMillion;
+}
+
+// --- FX rate (USD -> IDR) ---
+// Ganti sesuai kurs terkini. Bisa juga nanti dibaca dari ENV.
+const EXCHANGE_RATE_USD_TO_IDR = 16000; // contoh kurs 1 USD = 16,000 IDR
+
+function usdToIdr(valueUsd: number | null | undefined): number | null {
+  if (typeof valueUsd !== 'number' || !isFinite(valueUsd)) return null;
+  return valueUsd * EXCHANGE_RATE_USD_TO_IDR;
+}
+
 // ESM-safe __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -98,12 +120,24 @@ const analyticsHeader = [
   'jumlah_file_berisi',
   'total_input_token',
   'total_output_token',
+  'total_biaya_input',
+  'total_biaya_output',
+  'total_biaya_input_idr',
+  'total_biaya_output_idr',
   'rata2_input',
   'rata2_output',
+  'rata2_biaya_input',
+  'rata2_biaya_output',
+  'rata2_biaya_input_idr',
+  'rata2_biaya_output_idr',
   'maks_input',
   'file_maks_input',
+  'biaya_maks_input',
+  'biaya_maks_input_idr',
   'maks_output',
   'file_maks_output',
+  'biaya_maks_output',
+  'biaya_maks_output_idr',
 ];
 const analyticsHeaderRow = analyticsSheet.addRow(analyticsHeader);
 analyticsHeaderRow.font = { bold: true };
@@ -117,6 +151,8 @@ for (const k of sortedKeys) {
   let maxInputFile: string | null = null;
   let maxOutput = -Infinity;
   let maxOutputFile: string | null = null;
+  let maxInputCost = -Infinity;
+  let maxOutputCost = -Infinity;
 
   for (const pf of parsedFiles) {
     const tok = pf.tokenObj?.[k];
@@ -125,35 +161,61 @@ for (const k of sortedKeys) {
     if (typeof inV === 'number') {
       totalInput += inV;
       countInput += 1;
+      const inCost = costFromTokens(inV, PRICE_PER_M_INPUT);
       if (inV > maxInput) {
         maxInput = inV;
         maxInputFile = pf.file;
+        maxInputCost = inCost ?? maxInputCost;
       }
     }
     if (typeof outV === 'number') {
       totalOutput += outV;
       countOutput += 1;
+      const outCost = costFromTokens(outV, PRICE_PER_M_OUTPUT);
       if (outV > maxOutput) {
         maxOutput = outV;
         maxOutputFile = pf.file;
+        maxOutputCost = outCost ?? maxOutputCost;
       }
     }
   }
 
   const avgInput = countInput > 0 ? totalInput / countInput : null;
   const avgOutput = countOutput > 0 ? totalOutput / countOutput : null;
+  const totalInputCost = costFromTokens(totalInput, PRICE_PER_M_INPUT) ?? 0;
+  const totalOutputCost = costFromTokens(totalOutput, PRICE_PER_M_OUTPUT) ?? 0;
+  const avgInputCost = avgInput != null ? costFromTokens(avgInput, PRICE_PER_M_INPUT) : null;
+  const avgOutputCost = avgOutput != null ? costFromTokens(avgOutput, PRICE_PER_M_OUTPUT) : null;
+  const totalInputCostIdr = usdToIdr(totalInputCost) ?? null;
+  const totalOutputCostIdr = usdToIdr(totalOutputCost) ?? null;
+  const avgInputCostIdr = usdToIdr(avgInputCost ?? null);
+  const avgOutputCostIdr = usdToIdr(avgOutputCost ?? null);
+  const maxInputCostIdr = usdToIdr(isFinite(maxInputCost) ? maxInputCost : null);
+  const maxOutputCostIdr = usdToIdr(isFinite(maxOutputCost) ? maxOutputCost : null);
 
   analyticsSheet.addRow([
     k,
     Math.max(countInput, countOutput),
     totalInput || 0,
     totalOutput || 0,
+    totalInputCost,
+    totalOutputCost,
+    totalInputCostIdr,
+    totalOutputCostIdr,
     avgInput ?? null,
     avgOutput ?? null,
+    avgInputCost ?? null,
+    avgOutputCost ?? null,
+    avgInputCostIdr ?? null,
+    avgOutputCostIdr ?? null,
     isFinite(maxInput) ? maxInput : null,
     maxInputFile,
+    isFinite(maxInputCost) ? maxInputCost : null,
+    maxInputCostIdr ?? null,
     isFinite(maxOutput) ? maxOutput : null,
     maxOutputFile,
+    isFinite(maxOutputCost) ? maxOutputCost : null,
+    maxOutputCostIdr ?? null,
   ]);
 }
 
@@ -179,6 +241,20 @@ const totalInputAll = totalsPerFile.reduce((s, r) => s + r.totalInput, 0);
 const totalOutputAll = totalsPerFile.reduce((s, r) => s + r.totalOutput, 0);
 const avgInputPerFile = totalFiles > 0 ? totalInputAll / totalFiles : 0;
 const avgOutputPerFile = totalFiles > 0 ? totalOutputAll / totalFiles : 0;
+// Cost aggregates
+const totalInputCostAll = costFromTokens(totalInputAll, PRICE_PER_M_INPUT) ?? 0;
+const totalOutputCostAll = costFromTokens(totalOutputAll, PRICE_PER_M_OUTPUT) ?? 0;
+const totalCostAll = totalInputCostAll + totalOutputCostAll;
+const avgInputCostPerFile = totalFiles > 0 ? totalInputCostAll / totalFiles : 0;
+const avgOutputCostPerFile = totalFiles > 0 ? totalOutputCostAll / totalFiles : 0;
+const avgCostPerFile = totalFiles > 0 ? totalCostAll / totalFiles : 0;
+// IDR conversions
+const totalInputCostAllIdr = usdToIdr(totalInputCostAll) ?? 0;
+const totalOutputCostAllIdr = usdToIdr(totalOutputCostAll) ?? 0;
+const totalCostAllIdr = usdToIdr(totalCostAll) ?? 0;
+const avgInputCostPerFileIdr = usdToIdr(avgInputCostPerFile) ?? 0;
+const avgOutputCostPerFileIdr = usdToIdr(avgOutputCostPerFile) ?? 0;
+const avgCostPerFileIdr = usdToIdr(avgCostPerFile) ?? 0;
 
 const topFiles = totalsPerFile.sort((a, b) => b.totalAll - a.totalAll).slice(0, 5).map((r) => `${r.file}(${r.totalAll})`).join(', ');
 
@@ -187,8 +263,20 @@ analyticsSheet.addRow(['Ringkasan keseluruhan']);
 analyticsSheet.addRow(['jumlah_file', totalFiles]);
 analyticsSheet.addRow(['total_input_token', totalInputAll]);
 analyticsSheet.addRow(['total_output_token', totalOutputAll]);
+analyticsSheet.addRow(['total_biaya_input', totalInputCostAll]);
+analyticsSheet.addRow(['total_biaya_output', totalOutputCostAll]);
+analyticsSheet.addRow(['total_biaya_semua', totalCostAll]);
+analyticsSheet.addRow(['total_biaya_input_idr', totalInputCostAllIdr]);
+analyticsSheet.addRow(['total_biaya_output_idr', totalOutputCostAllIdr]);
+analyticsSheet.addRow(['total_biaya_semua_idr', totalCostAllIdr]);
 analyticsSheet.addRow(['rata2_input_per_file', avgInputPerFile]);
 analyticsSheet.addRow(['rata2_output_per_file', avgOutputPerFile]);
+analyticsSheet.addRow(['rata2_biaya_input_per_file', avgInputCostPerFile]);
+analyticsSheet.addRow(['rata2_biaya_output_per_file', avgOutputCostPerFile]);
+analyticsSheet.addRow(['rata2_biaya_total_per_file', avgCostPerFile]);
+analyticsSheet.addRow(['rata2_biaya_input_per_file_idr', avgInputCostPerFileIdr]);
+analyticsSheet.addRow(['rata2_biaya_output_per_file_idr', avgOutputCostPerFileIdr]);
+analyticsSheet.addRow(['rata2_biaya_total_per_file_idr', avgCostPerFileIdr]);
 analyticsSheet.addRow(['file_teratas_berdasarkan_total_token', topFiles]);
 
 // Hitung juga rata-rata per entry (non-null input/output occurrences)
@@ -209,13 +297,33 @@ analyticsSheet.addRow(['rata2_input_per_entry', avgInputPerEntry]);
 analyticsSheet.addRow(['rata2_output_per_entry', avgOutputPerEntry]);
 
 // Format numeric cells in Analitik sheet
+// Determine cost columns by header names containing 'biaya'
+const biayaHeaders = new Set<string>();
+analyticsSheet.getRow(2).eachCell((cell) => {
+  if (typeof cell.value === 'string' && cell.value.toLowerCase().includes('biaya')) {
+    biayaHeaders.add(String(cell.value));
+  }
+});
+
 for (let r = 2; r <= analyticsSheet.rowCount; r++) {
   const row = analyticsSheet.getRow(r);
-  row.eachCell((cell, colNumber) => {
+  row.eachCell((cell) => {
     const v = cell.value;
     if (typeof v === 'number') {
-      // integers (token counts)
-      cell.numFmt = '#,##0.00';
+      // Differentiate token counts vs costs by column header name (row 2)
+      const headerCell = analyticsSheet.getRow(2).getCell(cell.col);
+      const headerVal = headerCell.value;
+      if (typeof headerVal === 'string' && headerVal.toLowerCase().includes('biaya')) {
+        if (headerVal.toLowerCase().includes('idr')) {
+          // Format IDR (Rp) - usually no decimals or 2 decimals; choose 0 decimals for large values
+          cell.numFmt = '"Rp" #,##0';
+        } else {
+          cell.numFmt = '[$$-409]#,##0.0000';
+        }
+      } else {
+        // token or average token values
+        cell.numFmt = '#,##0.00';
+      }
     }
   });
 }
